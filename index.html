@@ -1,63 +1,52 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calculator, Building2, DollarSign, PieChart, FileText, AlertCircle, RefreshCw, Layers, Zap, CornerDownRight, ExternalLink } from 'lucide-react';
+import { Calculator, Building2, DollarSign, PieChart, FileText, AlertCircle, RefreshCw, Layers, Zap, CornerDownRight, ExternalLink, Key } from 'lucide-react';
 
 // ===================================================
 // 工具函數
 // ===================================================
 
-// 格式化金額
 const formatCurrency = (val) => {
   if (val === null || val === undefined) return "$0";
   const absoluteVal = Math.abs(val);
-  // 使用 'zh-TW' 格式化貨幣
   const formatted = new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(absoluteVal);
   return val < 0 ? `-${formatted}` : formatted;
 };
 
-// 轉換數字
 const parseNumber = (val) => {
   if (!val) return 0;
-  // 處理逗號或非數字字符，確保能正確解析數字
   return parseFloat(val.toString().replace(/[^\d\.]/g, ''));
 };
 
-// 營所稅計算邏輯 (2024年標準)
 const calculateTax = (taxableIncome) => {
     const income = Math.max(0, taxableIncome);
-    
-    if (income <= 120000) {
-      return 0;
-    } else if (income <= 200000) {
-      // 12萬到20萬的部分，課稅所得額減半課徵，實際稅率為 10%
-      return (income - 120000) * 0.5;
-    } else {
-      // 超過20萬，稅率 20%
-      return income * 0.2;
-    }
+    if (income <= 120000) return 0;
+    if (income <= 200000) return (income - 120000) * 0.5;
+    return income * 0.2;
 };
 
 // ===================================================
-// Gemini API 呼叫函數
+// Gemini API 呼叫函數 (支援環境變數與手動輸入)
 // ===================================================
 
-const callGeminiAPI = async (systemPrompt, userQuery) => {
-  const apiKey = "";
+const callGeminiAPI = async (systemPrompt, userQuery, manualKey) => {
+  // 優先順序：手動輸入 > 環境變數 > 預設空字串
+  const apiKey = manualKey || (typeof __initial_auth_token !== 'undefined' ? "" : ""); 
+  
+  if (!apiKey) throw new Error("MISSING_KEY");
+
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
 
   const payload = {
     contents: [{ parts: [{ text: userQuery }] }],
-    systemInstruction: {
-      parts: [{ text: systemPrompt }]
-    },
+    systemInstruction: { parts: [{ text: systemPrompt }] },
   };
 
-  let response = null;
   let attempts = 0;
   const maxRetries = 5;
 
   while (attempts < maxRetries) {
     try {
-      response = await fetch(apiUrl, {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -65,476 +54,206 @@ const callGeminiAPI = async (systemPrompt, userQuery) => {
 
       if (response.ok) {
         const result = await response.json();
-        return result.candidates?.[0]?.content?.parts?.[0]?.text || "無法獲取 AI 建議，請稍後再試。";
+        return result.candidates?.[0]?.content?.parts?.[0]?.text || "無法獲取 AI 建議。";
       } else if (response.status === 429) {
-        // 處理速率限制與指數退避
         const delay = Math.pow(2, attempts) * 1000 + Math.random() * 1000;
         await new Promise(resolve => setTimeout(resolve, delay));
         attempts++;
       } else {
-        // 非可重試錯誤
-        console.error("API Error:", response.status, response.statusText);
-        return `API 錯誤：${response.statusText}`;
+        const errData = await response.json();
+        throw new Error(errData.error?.message || "API Error");
       }
     } catch (error) {
+      if (attempts === maxRetries - 1) throw error;
       const delay = Math.pow(2, attempts) * 1000 + Math.random() * 1000;
       await new Promise(resolve => setTimeout(resolve, delay));
       attempts++;
     }
   }
-
-  return "API 呼叫失敗，請檢查網路連線或稍後再試。";
 };
 
-
 // ===================================================
-// React 元件
+// React 主程式
 // ===================================================
 
 const App = () => {
-  
-  // 比率輸入欄位
-  const [manualReviewRate, setManualReviewRate] = useState(6.0);      // 擴大書審純益率 - for Method 2
-  const [manualStandardRate, setManualStandardRate] = useState(24.0);  // 所得額標準 - for Method 3
-  const [manualIndustryRate, setManualIndustryRate] = useState(26.0);  // 同業利潤標準淨利率 - for Method 4
+  // 設置與 API Key
+  const [userApiKey, setUserApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
+  const [showKeyInput, setShowKeyInput] = useState(false);
 
-  // 財務數據輸入
-  const [revenue, setRevenue] = useState('15000000'); // 預設值，方便測試
+  // 財務數據與比率
+  const [manualReviewRate, setManualReviewRate] = useState(6.0);
+  const [manualStandardRate, setManualStandardRate] = useState(24.0);
+  const [manualIndustryRate, setManualIndustryRate] = useState(26.0);
+  const [revenue, setRevenue] = useState('15000000');
   const [cost, setCost] = useState('6000000');
   const [expense, setExpense] = useState('7000000');
   
-  // LLM 狀態
+  // AI 狀態
   const [aiAdvice, setAiAdvice] = useState('');
   const [isAILoading, setIsAILoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  // 處理百分比輸入，確保數值在 0 到 100 之間
-  const handleRateChange = (setter) => (e) => {
-    let value = parseNumber(e.target.value);
-    if (isNaN(value)) value = 0;
-    value = Math.max(0, Math.min(100, value)); // 限制在 0-100
-    setter(value);
+  // 儲存 Key 到 LocalStorage
+  const handleSaveKey = (e) => {
+    e.preventDefault();
+    localStorage.setItem('gemini_api_key', userApiKey);
+    setShowKeyInput(false);
+    setErrorMsg('');
   };
 
-
-  // 計算結果 (包含四種方法)
   const results = useMemo(() => {
     const rev = parseNumber(revenue);
     const cst = parseNumber(cost);
     const exp = parseNumber(expense);
 
-    // 1. 核實申報 (實際帳務 / 查帳)
     const actualProfit = rev - cst - exp;
     const actualTax = calculateTax(actualProfit);
     const actualNetRate = rev > 0 ? (actualProfit / rev) * 100 : 0;
 
-    // 2. 擴大書審 (書審) - 使用 X%
-    const reviewRate = manualReviewRate / 100;
-    const reviewProfit = rev * reviewRate;
-    const reviewTax = calculateTax(reviewProfit);
-
-    // 3. 所得額標準 - 使用 Y%
-    const standardRate = manualStandardRate / 100;
-    const standardProfit = rev * standardRate;
-    const standardTax = calculateTax(standardProfit);
-    
-    // 4. 同業利潤標準淨利率 - 使用 Y'%
-    const industryRate = manualIndustryRate / 100;
-    const industryProfit = rev * industryRate;
-    // 確保這裡用的是 Profit 而非 Rate
-    const industryTax = calculateTax(industryProfit); 
-
-
     return {
       rev, cst, exp,
       actual: { profit: actualProfit, tax: actualTax, rate: actualNetRate, name: '核實申報 (查帳)' },
-      review: { profit: reviewProfit, tax: reviewTax, name: '擴大書審 (書審)' },
-      standard: { profit: standardProfit, tax: standardTax, name: '所得額標準' }, // Method 3
-      industry: { profit: industryProfit, tax: industryTax, name: '同業利潤標準淨利率' } // Method 4
+      review: { profit: rev * (manualReviewRate / 100), tax: calculateTax(rev * (manualReviewRate / 100)), name: '擴大書審 (書審)' },
+      standard: { profit: rev * (manualStandardRate / 100), tax: calculateTax(rev * (manualStandardRate / 100)), name: '所得額標準' },
+      industry: { profit: rev * (manualIndustryRate / 100), tax: calculateTax(rev * (manualIndustryRate / 100)), name: '同業利潤標準' }
     };
   }, [revenue, cost, expense, manualReviewRate, manualStandardRate, manualIndustryRate]);
 
-  // 處理 AI 顧問生成建議
   const handleGenerateAdvice = async () => {
-    if (results.rev <= 0) {
-      setAiAdvice("請先輸入有效的全年營業收入才能進行稅務策略分析。");
-      return;
+    if (!userApiKey) {
+        setShowKeyInput(true);
+        return;
     }
     
     setIsAILoading(true);
+    setErrorMsg('');
     setAiAdvice('');
 
-    const isOver30M = results.rev > 30000000;
-    const taxWarning = isOver30M ? "公司營收已超過 3000 萬元門檻，通常不適用擴大書審。" : "公司營收符合擴大書審門檻。";
+    const systemPrompt = `您是一位專業的台灣會計師。根據數據提供簡潔策略。
+    邏輯：
+    1. 若實際淨利率 > 書審率 且 營收 < 3000萬，不建議書審以避免成本費用不足被查帳。
+    2. 若實際淨利率 > 所得額標準，建議直接申報「所得額標準」以降低國稅局調帳風險。
+    3. 結尾必須包含：本分析為電腦模擬，最終申報請諮詢專業會計師。`;
 
-    // 計算最低稅額和對應的方法
-    const methods = [results.actual, results.review, results.standard, results.industry];
-    const minTax = Math.min(...methods.map(m => m.tax));
-    const bestMethods = methods.filter(m => m.tax === minTax).map(m => m.name);
+    const userQuery = `數據：營收 ${results.rev}, 實際淨利 ${results.actual.profit}, 實際利率 ${results.actual.rate.toFixed(2)}%, 書審率 ${manualReviewRate}%, 所得額標準 ${manualStandardRate}%。`;
 
-    // 格式化數據以供 LLM 閱讀 (包含所有四種方法)
-    const dataForLLM = `
-      --- 財務數據 ---
-      全年營業收入 (A): ${formatCurrency(results.rev)}
-      營業成本 (B): ${formatCurrency(results.cst)}
-      營業費用 (C): ${formatCurrency(results.exp)}
-      實際淨利 (A-B-C): ${formatCurrency(results.actual.profit)}
-      實際淨利率: ${results.actual.rate.toFixed(2)}%
-
-      --- 行業標準 (手動輸入) ---
-      擴大書審純益率: ${manualReviewRate.toFixed(2)}%
-      所得額標準: ${manualStandardRate.toFixed(2)}%
-      同業利潤標準淨利率：${manualIndustryRate.toFixed(2)}%
-      ${taxWarning}
-
-      --- 試算結果比較 (四種方法) ---
-      1. 核實申報 (查帳):
-         課稅所得額: ${formatCurrency(results.actual.profit)}
-         應納稅額: ${formatCurrency(results.actual.tax)}
-      
-      2. 擴大書審 (書審):
-         課稅所得額: ${formatCurrency(results.review.profit)}
-         應納稅額: ${formatCurrency(results.review.tax)}
-
-      3. 所得額標準:
-         課稅所得額: ${formatCurrency(results.standard.profit)}
-         應納稅額: ${formatCurrency(results.standard.tax)}
-
-      4. 同業利潤標準淨利率:
-         課稅所得額: ${formatCurrency(results.industry.profit)}
-         應納稅額: ${formatCurrency(results.industry.tax)}
-
-      --- 試算總結 ---
-      試算中最低應納稅額為: ${formatCurrency(minTax)}
-      達成最低稅額的申報方法是: ${bestMethods.join(' 或 ')}
-    `;
-
-    // System Prompt 專為簡潔建議設計 (根據使用者要求 - 已加入更嚴格的查帳風險評估)
-    const systemPrompt = `您是一位專業的台灣會計師及稅務分析師。您的任務是根據提供的財務數據和四種申報試算結果，為企業主提供**單一、簡潔、直接**的申報策略建議。
-
-**核心邏輯 (必須遵守):**
-1. **目標**：在合法框架內，建議能達成最低稅負且**查帳風險最低**的申報方法。
-2. **擴大書審 (書審) 風險**：如果「核實申報 (查帳)」的**實際淨利率**顯著高於「擴大書審 (書審)」的**純益率**（例如，高出超過 2%），且公司營收低於 3000 萬元（適用書審門檻），則**絕對不建議**申報「擴大書審」，即使其稅額最低。
-3. **查帳風險 (成本不足)**：當**實際淨利率**高於**所得額標準**時，代表帳上成本費用不足，申報「核實申報 (查帳)」可能被國稅局直接調整到「所得額標準」或更高的「同業利潤標準淨利率」課稅。
-4. **風險導向推薦**：
-    a. 如果擴大書審有高風險（依據第2點），或申報核實查帳有高風險（依據第3點），則應**轉而建議**採用**所得額標準**作為最安全的申報選項，並簡要說明這是為了**避免國稅局調帳風險**。
-    b. 若無上述高風險，則優先推薦試算中稅額最低的選項。
-
-**輸出格式**：您的回應必須是**一個結構化的單一段落**，直接建議最佳申報方式和理由，不要使用任何標題或點列清單。
-
-**務必在建議結尾明確指出：本分析為電腦模擬，最終申報請務必諮詢專業會計師，以避免稅務風險。**請勿使用任何程式碼區塊。`;
-
-    const advice = await callGeminiAPI(systemPrompt, `請根據以下數據生成稅務申報策略建議書:\n${dataForLLM}`);
-    
-    setAiAdvice(advice);
-    setIsAILoading(false);
+    try {
+      const advice = await callGeminiAPI(systemPrompt, userQuery, userApiKey);
+      setAiAdvice(advice);
+    } catch (err) {
+      if (err.message === "MISSING_KEY") setShowKeyInput(true);
+      else setErrorMsg(err.message);
+    } finally {
+      setIsAILoading(false);
+    }
   };
 
-  // 在數據或比率變動時清除舊的建議
-  useEffect(() => {
-    setAiAdvice('');
-  }, [revenue, cost, expense, manualReviewRate, manualStandardRate, manualIndustryRate]);
-
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-4 md:p-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8">
+      <div className="max-w-6xl mx-auto">
         
         {/* Header */}
-        <header className="mb-8 text-center md:text-left flex flex-col md:flex-row justify-between items-center">
+        <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3 justify-center md:justify-start">
-              <Calculator className="w-8 h-8 text-blue-600" />
-              營利事業所得稅四種申報方法試算機
+            <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+              <Calculator className="w-7 h-7 text-blue-600" />
+              台灣營所稅申報試算機 (GitHub 開源版)
             </h1>
-            <p className="text-slate-500 mt-2">
-              比較「查帳」、「書審」、「所得額標準」與「同業利潤標準淨利率」下的課稅所得及稅負差異
-            </p>
           </div>
-          <div className="mt-4 md:mt-0 bg-blue-100 text-blue-800 px-4 py-2 rounded-lg text-sm font-medium">
-            營所稅率: 20%
-          </div>
-        </header>
+          <button 
+            onClick={() => setShowKeyInput(true)}
+            className="text-xs flex items-center gap-1 text-slate-500 hover:text-blue-600 transition"
+          >
+            <Key className="w-3 h-3" /> {userApiKey ? '更新 API Key' : '設定 API Key'}
+          </button>
+        </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
-          {/* Left Column: Inputs */}
-          <div className="lg:col-span-1 space-y-6">
-            
-            {/* Section 1: Standard Rate Inputs (Three fields) */}
-            <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
-              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <Building2 className="w-5 h-5 text-slate-400" />
-                標準比率輸入指南
+        {/* API Key Modal */}
+        {showKeyInput && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-2xl">
+              <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
+                <Key className="w-5 h-5 text-blue-600" /> 設定 Google Gemini API Key
+              </h3>
+              <p className="text-sm text-slate-500 mb-4">
+                本程式使用 Gemini AI 提供建議。您的 Key 將僅儲存於您的瀏覽器中。
+              </p>
+              <form onSubmit={handleSaveKey}>
+                <input 
+                  type="password"
+                  placeholder="在此貼上您的 API Key..."
+                  className="w-full p-2 border rounded-lg mb-4 outline-none focus:ring-2 focus:ring-blue-500"
+                  value={userApiKey}
+                  onChange={(e) => setUserApiKey(e.target.value)}
+                  required
+                />
+                <div className="flex gap-2">
+                  <button type="submit" className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold">儲存並關閉</button>
+                  <button type="button" onClick={() => setShowKeyInput(false)} className="px-4 py-2 text-slate-500">取消</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* 左側輸入區 */}
+          <div className="space-y-6">
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+              <h2 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
+                <Building2 className="w-4 h-4" /> 標準比率 (%)
               </h2>
-              
-              <div className="space-y-4">
-                
-                {/* 步驟指南 - 根據使用者要求更新 */}
-                <div className="bg-blue-50 border-l-4 border-blue-400 p-3 rounded-md">
-                    <p className="text-sm font-semibold text-blue-800 mb-2">📝 申報策略試算步驟</p>
-                    <ol className="list-decimal list-inside text-xs text-blue-700 space-y-2 pl-1">
-                        <li>
-                            查詢公司**行業代碼**：請至 
-                            <a 
-                                href="https://www.etax.nat.gov.tw/etwmain/etw113w1/ban/query" 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-800 underline flex items-center gap-1 ml-1 inline-flex"
-                            >
-                                國稅局營業人代碼查詢 <ExternalLink className="w-3 h-3" />
-                            </a>
-                        </li>
-                        <li>
-                            查詢**標準比率**：前往 
-                            <a 
-                                href="https://service.mof.gov.tw/public/Data/statistic/std/zhtw/search.html" 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-800 underline flex items-center gap-1 ml-1 inline-flex"
-                            >
-                                稅務行業標準分類暨同業利潤標準查詢系統 <ExternalLink className="w-3 h-3" />
-                            </a>
-                        </li>
-                        <li>輸入**擴大書審純益率**、**所得額標準**、**同業利潤標準淨利率** 於下方欄位。</li>
-                        <li>輸入目前實際**營業收入、成本與費用**。</li>
-                        <li>點擊 **AI 顧問按鈕**，取得申報建議。</li>
-                    </ol>
-                </div>
-                
-                {/* 擴大書審純益率輸入 */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">擴大書審純益率 <span className="text-blue-500 font-bold">(用於方法二)</span></label>
-                  <div className="relative">
-                    <input 
-                      type="number" 
-                      step="0.1"
-                      min="0"
-                      max="100"
-                      value={manualReviewRate}
-                      onChange={handleRateChange(setManualReviewRate)}
-                      placeholder="例如: 6.0"
-                      className="w-full pr-8 pl-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono text-lg"
-                    />
-                    <span className="absolute right-3 top-2.5 text-slate-400 font-bold">%</span>
-                  </div>
-                </div>
-
-                {/* 所得額標準輸入 (用於計算 Method 3) */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">所得額標準 <span className="text-orange-500 font-bold">(用於方法三)</span></label>
-                  <div className="relative">
-                    <input 
-                      type="number" 
-                      step="0.1"
-                      min="0"
-                      max="100"
-                      value={manualStandardRate}
-                      onChange={handleRateChange(setManualStandardRate)}
-                      placeholder="例如: 24.0"
-                      className="w-full pr-8 pl-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none font-mono text-lg"
-                    />
-                    <span className="absolute right-3 top-2.5 text-slate-400 font-bold">%</span>
-                  </div>
-                </div>
-
-                {/* 同業利潤標準淨利率輸入 (用於計算 Method 4) */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">同業利潤標準淨利率 <span className="text-purple-500 font-bold">(用於方法四)</span></label>
-                  <div className="relative">
-                    <input 
-                      type="number" 
-                      step="0.1"
-                      min="0"
-                      max="100"
-                      value={manualIndustryRate}
-                      onChange={handleRateChange(setManualIndustryRate)}
-                      placeholder="例如: 26.0"
-                      className="w-full pr-8 pl-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none font-mono text-lg"
-                    />
-                    <span className="absolute right-3 top-2.5 text-slate-400 font-bold">%</span>
-                  </div>
-                </div>
+              <div className="space-y-3">
+                <RateInput label="擴大書審率" value={manualReviewRate} setter={setManualReviewRate} color="blue" />
+                <RateInput label="所得額標準" value={manualStandardRate} setter={setManualStandardRate} color="orange" />
+                <RateInput label="同業淨利率" value={manualIndustryRate} setter={setManualIndustryRate} color="purple" />
               </div>
             </div>
 
-            {/* Section 2: Financials */}
-            <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
-              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <DollarSign className="w-5 h-5 text-slate-400" />
-                財務數據輸入
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+              <h2 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
+                <DollarSign className="w-4 h-4" /> 財務數據 (TWD)
               </h2>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">全年營業收入 (不含稅)</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-2.5 text-slate-400">TWD</span>
-                    <input 
-                      type="number" 
-                      value={revenue}
-                      onChange={(e) => setRevenue(e.target.value)}
-                      placeholder="0"
-                      className="w-full pl-12 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none font-mono text-lg"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">營業成本</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-2.5 text-slate-400">TWD</span>
-                    <input 
-                      type="number" 
-                      value={cost}
-                      onChange={(e) => setCost(e.target.value)}
-                      placeholder="0"
-                      className="w-full pl-12 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none font-mono text-lg"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">營業費用</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-2.5 text-slate-400">TWD</span>
-                    <input 
-                      type="number" 
-                      value={expense}
-                      onChange={(e) => setExpense(e.target.value)}
-                      placeholder="0"
-                      className="w-full pl-12 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none font-mono text-lg"
-                    />
-                  </div>
-                </div>
+              <div className="space-y-3">
+                <NumberInput label="全年度營業收入" value={revenue} setter={setRevenue} />
+                <NumberInput label="營業成本" value={cost} setter={setCost} />
+                <NumberInput label="營業費用" value={expense} setter={setExpense} />
               </div>
             </div>
           </div>
 
-          {/* Right Column: Results - Grid of 4 Methods & AI Advisor (Colspan 2) */}
+          {/* 右側結果區 */}
           <div className="lg:col-span-2 space-y-6">
-             <h2 className="text-xl font-bold text-slate-700 mb-4">稅務申報方式比較 (四種方法)</h2>
-             
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
-                
-                {/* Method 1: Actual Reporting (核實申報/查帳) */}
-                <ResultCard 
-                title="方法一：查帳 (核實申報)"
-                icon={FileText}
-                color="green"
-                description="實際收入 - 實際成本費用 = 課稅所得。最標準的申報方式。"
-                profit={results.actual.profit}
-                tax={results.actual.tax}
-                details={
-                    <>
-                    <div className="flex justify-between border-b border-slate-100 pb-2">
-                        <span className="text-slate-500">實際淨利率</span>
-                        <span className="font-mono text-sm">{results.actual.rate.toFixed(2)}%</span>
-                    </div>
-                    </>
-                }
-                />
-
-                {/* Method 2: Expanded Paper Review (擴大書審/書審) */}
-                <ResultCard 
-                title="方法二：書審 (擴大書審)"
-                icon={PieChart}
-                color="blue"
-                description={`營收 × ${manualReviewRate}% = 推計所得。適用營收低於門檻之公司。`}
-                profit={results.review.profit}
-                tax={results.review.tax}
-                details={
-                    <>
-                    <div className="flex justify-between border-b border-slate-100 pb-2">
-                        <span className="text-slate-500">書審純益率</span>
-                        <span className="font-mono text-blue-600 font-bold text-sm">{manualReviewRate.toFixed(2)}%</span>
-                    </div>
-                    </>
-                }
-                />
-
-                {/* Method 3: Standard Profit Rate (所得額標準) */}
-                <ResultCard 
-                title="方法三：所得額標準"
-                icon={Layers}
-                color="orange"
-                description={`營收 × ${manualStandardRate}% = 推計所得。通常用於帳證不齊全時。`}
-                profit={results.standard.profit}
-                tax={results.standard.tax}
-                details={
-                    <>
-                    <div className="flex justify-between border-b border-slate-100 pb-2">
-                        <span className="text-slate-500">所得額標準</span>
-                        <span className="font-mono text-orange-600 font-bold text-sm">{manualStandardRate.toFixed(2)}%</span>
-                    </div>
-                    </>
-                }
-                />
-
-                {/* Method 4: Industry Profit Standard (同業利潤標準淨利率) */}
-                <ResultCard 
-                title="方法四：同業淨利率"
-                icon={Layers}
-                color="purple"
-                description={`營收 × ${manualIndustryRate}% = 推計所得。用於計算利潤率上限。`}
-                profit={results.industry.profit}
-                tax={results.industry.tax}
-                details={
-                    <>
-                    <div className="flex justify-between border-b border-slate-100 pb-2">
-                        <span className="text-slate-500">同業淨利率標準</span>
-                        <span className="font-mono text-purple-600 font-bold text-sm">{manualIndustryRate.toFixed(2)}%</span>
-                    </div>
-                    </>
-                }
-                />
-
+            <div className="grid grid-cols-2 gap-4">
+                <MiniCard title="查帳申報" amount={results.actual.tax} rate={results.actual.rate} color="green" />
+                <MiniCard title="書審申報" amount={results.review.tax} rate={manualReviewRate} color="blue" />
+                <MiniCard title="所得額標準" amount={results.standard.tax} rate={manualStandardRate} color="orange" />
+                <MiniCard title="同業淨利率" amount={results.industry.tax} rate={manualIndustryRate} color="purple" />
             </div>
-            
-            {/* AI Tax Advisor Section */}
-            <div className="bg-white p-6 rounded-xl shadow-lg border border-purple-200">
+
+            <div className="bg-white p-6 rounded-xl shadow-md border-t-4 border-purple-500">
                 <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-bold text-purple-700 flex items-center gap-2">
-                        <Zap className="w-6 h-6 text-purple-500" />
-                        智慧稅務顧問 ✨
+                    <h2 className="font-bold text-purple-700 flex items-center gap-2">
+                        <Zap className="w-5 h-5" /> AI 稅務策略顧問
                     </h2>
                     <button 
                         onClick={handleGenerateAdvice}
-                        disabled={isAILoading || results.rev <= 0}
-                        className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50 transition shadow-md"
+                        disabled={isAILoading}
+                        className="bg-purple-600 text-white px-4 py-1.5 rounded-full text-sm font-bold flex items-center gap-2 hover:bg-purple-700 transition disabled:opacity-50"
                     >
-                        {isAILoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CornerDownRight className="w-4 h-4" />}
-                        {isAILoading ? '分析中...' : '生成申報策略建議'}
+                        {isAILoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : '開始分析'}
                     </button>
                 </div>
-                
-                <div className="min-h-32 bg-purple-50 p-4 rounded-lg text-sm text-slate-700 border border-purple-100">
-                    {aiAdvice ? (
-                        // 使用 dangerouslySetInnerHTML 渲染 LLM 輸出的 Markdown 格式化內容
-                        // Note: LLM output is now a concise paragraph.
-                        <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: aiAdvice }} />
-                    ) : (
-                        <p className="text-slate-500 italic">點擊上方的按鈕，讓 AI 根據您的財務數據和四種比率，生成一份客製化的稅務申報策略分析報告。</p>
-                    )}
+                <div className="bg-slate-50 p-4 rounded-lg border text-sm leading-relaxed text-slate-700 min-h-[100px]">
+                    {errorMsg && <p className="text-red-500 font-bold mb-2">錯誤：{errorMsg}</p>}
+                    {aiAdvice || "請輸入數據並點擊分析按鈕以獲取建議。建議將考慮查帳風險，若成本費用不足，將避開低報風險。"}
                 </div>
             </div>
 
-
-            {/* Comparison Logic / Warning */}
-            {parseNumber(revenue) > 30000000 && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                <div className="text-sm text-red-800">
-                  <p className="font-bold">重要提醒：營收超過 3,000 萬元限制</p>
-                  <p>通常不適用「擴大書審」申報，必須採用「核實申報」(查帳) 或會計師簽證申報。如果帳證不完備，將直接依「所得額標準」或「同業利潤標準淨利率」核定，建議務必核實申報。</p>
-                </div>
-              </div>
-            )}
-            
-            <div className="bg-slate-100 p-4 rounded-lg text-xs text-slate-500">
-              <p className="font-bold mb-1">免責聲明：</p>
-              <p>1. 本工具僅供財務試算參考，**所有百分比皆由使用者手動輸入**，實際稅額以國稅局核定為準。請諮詢專業會計師或稅務顧問。</p>
-              <p>2. 行業代碼與利潤標準會隨年度變動，請以財政部最新公告為準。</p>
+            <div className="text-[10px] text-slate-400 bg-slate-100 p-3 rounded">
+                * 本專案僅供學習交流。使用者需自備 Google Gemini API Key。所有運算於本地瀏覽器完成，開發者不會獲取您的任何數據。
             </div>
-
           </div>
         </div>
       </div>
@@ -542,59 +261,47 @@ const App = () => {
   );
 };
 
-// 獨立的結果卡片元件，用於重覆使用
-const ResultCard = ({ title, icon: Icon, color, description, profit, tax, details }) => {
-  // 擴充顏色設定，新增 purple
-  const colorClasses = {
-    green: { bg: 'bg-green-600', text: 'text-green-700', lightBg: 'bg-green-50', lightBorder: 'border-green-100', textLight: 'text-green-600' },
-    blue: { bg: 'bg-blue-600', text: 'text-blue-700', lightBg: 'bg-blue-50', lightBorder: 'border-blue-100', textLight: 'text-blue-600' },
-    orange: { bg: 'bg-orange-600', text: 'text-orange-700', lightBg: 'bg-orange-50', lightBorder: 'border-orange-100', textLight: 'text-orange-600' },
-    purple: { bg: 'bg-purple-600', text: 'text-purple-700', lightBg: 'bg-purple-50', lightBorder: 'border-purple-100', textLight: 'text-purple-600' },
-  }[color];
-
-  const taxBreakdown = useMemo(() => {
-    if (profit <= 120000) return '淨利 12 萬以下免徵';
-    if (profit <= 200000) return '超過 12 萬部分減半課徵';
-    return '稅率 20%';
-  }, [profit]);
-
-  return (
-    <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden transition-all hover:shadow-xl h-full flex flex-col">
-      <div className={`${colorClasses.bg} text-white px-3 py-2 flex justify-between items-center flex-shrink-0`}>
-        <h3 className="font-bold text-sm md:text-base flex items-center gap-2">
-          <Icon className="w-4 h-4" /> 
-          {title}
-        </h3>
-      </div>
-      <div className="p-3 flex-grow flex flex-col justify-between">
-        <div>
-            <p className="text-[10px] md:text-xs text-slate-500 mb-3 p-1 rounded bg-slate-50 border border-slate-100">
-                {description}
-            </p>
-            <div className="space-y-2 text-[10px] md:text-xs">
-                {details}
-            </div>
-            
-            <div className="flex flex-col md:flex-row justify-between items-center pt-2 mt-2 border-t border-dashed border-slate-300">
-                <span className="font-bold text-slate-800 text-sm">課稅所得額</span>
-                <span className={`font-mono font-extrabold text-lg md:text-xl ${colorClasses.textLight}`}>
-                    {formatCurrency(profit)}
-                </span>
-            </div>
-        </div>
-
-        <div className={`mt-3 ${colorClasses.lightBg} rounded-lg p-2 flex flex-col justify-center items-center border ${colorClasses.lightBorder} flex-shrink-0`}>
-            <span className="text-slate-500 text-[10px] md:text-xs mb-1">預估應納營所稅額</span>
-            <span className={`text-xl md:text-2xl font-black ${colorClasses.text} font-mono`}>
-              {formatCurrency(tax)}
-            </span>
-            <div className="mt-1 text-[10px] text-center text-slate-500">
-              <p>{taxBreakdown}</p>
-            </div>
-        </div>
-      </div>
+// 小元件
+const RateInput = ({ label, value, setter, color }) => (
+  <div className="flex justify-between items-center">
+    <label className="text-sm text-slate-600">{label}</label>
+    <div className="relative w-24">
+      <input 
+        type="number" 
+        className="w-full p-1 text-right border rounded pr-5 font-mono" 
+        value={value} 
+        onChange={e => setter(parseFloat(e.target.value) || 0)} 
+      />
+      <span className="absolute right-1 top-1 text-slate-400 text-xs">%</span>
     </div>
-  );
+  </div>
+);
+
+const NumberInput = ({ label, value, setter }) => (
+  <div>
+    <label className="text-[10px] text-slate-400 uppercase font-bold">{label}</label>
+    <input 
+      type="number" 
+      className="w-full p-2 border rounded font-mono text-lg bg-slate-50" 
+      value={value} 
+      onChange={e => setter(e.target.value)} 
+    />
+  </div>
+);
+
+const MiniCard = ({ title, amount, rate, color }) => {
+    const colors = {
+        green: 'border-green-200 bg-green-50 text-green-700',
+        blue: 'border-blue-200 bg-blue-50 text-blue-700',
+        orange: 'border-orange-200 bg-orange-50 text-orange-700',
+        purple: 'border-purple-200 bg-purple-50 text-purple-700',
+    }[color];
+    return (
+        <div className={`p-4 rounded-xl border-2 ${colors}`}>
+            <div className="text-xs font-bold opacity-70 mb-1">{title} ({rate.toFixed(1)}%)</div>
+            <div className="text-xl font-black font-mono">{formatCurrency(amount)}</div>
+        </div>
+    );
 };
 
 export default App;
