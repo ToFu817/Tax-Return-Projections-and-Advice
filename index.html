@@ -168,7 +168,7 @@
                                     <div className="bg-[#FCD34D] p-3 rounded-2xl flex items-center justify-center">
                                         <Icon name="calculator" className="w-8 h-8 text-white" />
                                     </div>
-                                    營利事業所得稅：申報方式推薦及估算
+                                    營利事業所得稅：申報方式推薦及估計稅額
                                 </h1>
                                 <p className="text-lg text-[#B45309] mt-2 font-medium italic">稅務小豆腐 讓繁瑣的稅務變簡單</p>
                             </div>
@@ -261,8 +261,8 @@
 
                                 {/* Results Grid */}
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                    <ResultCard title="核實申報 (查帳)" amount={results.actual.tax} rate={results.actual.rate} color="bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46]" />
-                                    <ResultCard title="擴大書審 (書審)" amount={results.review.tax} rate={manualReviewRate} color="bg-[#F0F9FF] border-[#BAE6FD] text-[#075985]" />
+                                    <ResultCard title="查帳申報 ()" amount={results.actual.tax} rate={results.actual.rate} color="bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46]" />
+                                    <ResultCard title="擴大書審 " amount={results.review.tax} rate={manualReviewRate} color="bg-[#F0F9FF] border-[#BAE6FD] text-[#075985]" />
                                     <ResultCard title="所得額標準" amount={results.standard.tax} rate={manualStandardRate} color="bg-[#FFF7ED] border-[#FED7AA] text-[#9A3412]" />
                                     <ResultCard title="同業利潤標準" amount={results.industry.tax} rate={manualIndustryRate} color="bg-[#F5F3FF] border-[#DDD6FE] text-[#5B21B6]" />
                                 </div>
