@@ -1,250 +1,227 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { Calculator, Building2, DollarSign, AlertCircle, Layers, ClipboardCheck, Sparkles, ExternalLink, HelpCircle, ListOrdered } from 'lucide-react';
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台灣營所稅試算機 - 稅務小豆腐版</title>
+    <!-- 引入 Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 React 與 Babel CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- 引入 Lucide 圖示庫 -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #FFFBEB;
+        }
+        /* 隱藏 Chrome/Safari 的數字輸入框箭頭 */
+        input::-webkit-outer-spin-button,
+        input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-// ===================================================
-// 工具函數
-// ===================================================
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
 
-const formatCurrency = (val) => {
-  if (val === null || val === undefined) return "$0";
-  const absoluteVal = Math.abs(val);
-  const formatted = new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(absoluteVal);
-  return val < 0 ? `-${formatted}` : formatted;
-};
+        // 圖示組件適配器 (因為 CDN 版本使用方式略有不同)
+        const Icon = ({ name, className }) => {
+            useEffect(() => {
+                lucide.createIcons();
+            }, []);
+            return <i data-lucide={name} className={className}></i>;
+        };
 
-const parseNumber = (val) => {
-  if (!val) return 0;
-  return parseFloat(val.toString().replace(/[^\d\.]/g, ''));
-};
+        const formatCurrency = (val) => {
+            if (val === null || val === undefined) return "$0";
+            const absoluteVal = Math.abs(val);
+            const formatted = new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(absoluteVal);
+            return val < 0 ? `-${formatted}` : formatted;
+        };
 
-const calculateTax = (taxableIncome) => {
-    const income = Math.max(0, taxableIncome);
-    if (income <= 120000) return 0;
-    if (income <= 200000) return (income - 120000) * 0.5;
-    return income * 0.2;
-};
+        const parseNumber = (val) => {
+            if (!val) return 0;
+            return parseFloat(val.toString().replace(/[^\d\.]/g, ''));
+        };
 
-// ===================================================
-// React 主程式
-// ===================================================
+        const calculateTax = (taxableIncome) => {
+            const income = Math.max(0, taxableIncome);
+            if (income <= 120000) return 0;
+            if (income <= 200000) return (income - 120000) * 0.5;
+            return income * 0.2;
+        };
 
-const App = () => {
-  // 財務數據與比率
-  const [manualReviewRate, setManualReviewRate] = useState(6.0);
-  const [manualStandardRate, setManualStandardRate] = useState(24.0);
-  const [manualIndustryRate, setManualIndustryRate] = useState(26.0);
-  const [revenue, setRevenue] = useState('15000000');
-  const [cost, setCost] = useState('6000000');
-  const [expense, setExpense] = useState('7000000');
-  
-  // 策略紀錄 (手動/自動混合)
-  const [myStrategy, setMyStrategy] = useState('');
+        const App = () => {
+            const [manualReviewRate, setManualReviewRate] = useState(6.0);
+            const [manualStandardRate, setManualStandardRate] = useState(24.0);
+            const [manualIndustryRate, setManualIndustryRate] = useState(26.0);
+            const [revenue, setRevenue] = useState('15000000');
+            const [cost, setCost] = useState('6000000');
+            const [expense, setExpense] = useState('7000000');
+            const [myStrategy, setMyStrategy] = useState('');
 
-  const results = useMemo(() => {
-    const rev = parseNumber(revenue);
-    const cst = parseNumber(cost);
-    const exp = parseNumber(expense);
+            const results = useMemo(() => {
+                const rev = parseNumber(revenue);
+                const cst = parseNumber(cost);
+                const exp = parseNumber(expense);
+                const actualProfit = rev - cst - exp;
+                const actualTax = calculateTax(actualProfit);
+                const actualNetRate = rev > 0 ? (actualProfit / rev) * 100 : 0;
 
-    const actualProfit = rev - cst - exp;
-    const actualTax = calculateTax(actualProfit);
-    const actualNetRate = rev > 0 ? (actualProfit / rev) * 100 : 0;
+                return {
+                    rev, cst, exp,
+                    actual: { profit: actualProfit, tax: actualTax, rate: actualNetRate },
+                    review: { profit: rev * (manualReviewRate / 100), tax: calculateTax(rev * (manualReviewRate / 100)) },
+                    standard: { profit: rev * (manualStandardRate / 100), tax: calculateTax(rev * (manualStandardRate / 100)) },
+                    industry: { profit: rev * (manualIndustryRate / 100), tax: calculateTax(rev * (manualIndustryRate / 100)) }
+                };
+            }, [revenue, cost, expense, manualReviewRate, manualStandardRate, manualIndustryRate]);
 
-    return {
-      rev, cst, exp,
-      actual: { profit: actualProfit, tax: actualTax, rate: actualNetRate, name: '核實申報 (查帳)' },
-      review: { profit: rev * (manualReviewRate / 100), tax: calculateTax(rev * (manualReviewRate / 100)), name: '擴大書審 (書審)' },
-      standard: { profit: rev * (manualStandardRate / 100), tax: calculateTax(rev * (manualStandardRate / 100)), name: '所得額標準' },
-      industry: { profit: rev * (manualIndustryRate / 100), tax: calculateTax(rev * (manualIndustryRate / 100)), name: '同業利潤標準' }
-    };
-  }, [revenue, cost, expense, manualReviewRate, manualStandardRate, manualIndustryRate]);
+            useEffect(() => {
+                const { rev, actual, review, standard, industry } = results;
+                if (rev <= 0) return;
+                let advice = "";
+                const costRatio = rev > 0 ? ((parseNumber(cost) + parseNumber(expense)) / rev) : 0;
 
-  // 自動生成建議邏輯
-  useEffect(() => {
-    const { rev, cst, exp, actual, review, standard, industry } = results;
-    if (rev <= 0) return;
+                if (actual.tax <= review.tax || (actual.tax - review.tax) < 10000) {
+                    advice = `【申報建議：核實申報 (查帳)】\n目前查帳稅額 (${formatCurrency(actual.tax)})，以「${actual.tax < review.tax ? '查帳申報' : '書審申報'}」稅額較具優勢。但要注意憑證是否為合法憑證，成本費用比例是否合理。\n\n若帳證齊全，也希望被國稅局調帳查核的機率降低，建議採「擴大書審」申報。`;
+                } else if (actual.tax > standard.tax && actual.tax > industry.tax) {
+                    advice = `【申報建議：${costRatio >= 0.5 ? '所得額標準' : '同業利潤標準'}】\n目前帳上查帳稅額過高，顯示成本費用憑證不足。建議採用「${costRatio >= 0.5 ? '所得額標準' : '同業利潤標準'}」申報，以降低稅負並符合行業常態。`;
+                } else {
+                    advice = `【申報建議：核實申報 (查帳)】\n建議優先檢視帳上憑證完整度。目前試算以「${actual.tax < review.tax ? '查帳申報' : '書審申報'}」稅額較具優勢。`;
+                }
+                setMyStrategy(advice);
+            }, [results]);
 
-    let advice = "";
-    const costExpenseSum = cst + exp;
-    const costRatio = rev > 0 ? (costExpenseSum / rev) : 0;
+            return (
+                <div className="min-h-screen text-[#78350F] p-4 md:p-8">
+                    <div className="max-w-6xl mx-auto">
+                        {/* Header */}
+                        <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4 bg-white p-8 rounded-3xl shadow-sm border border-[#FEF3C7]">
+                            <div>
+                                <h1 className="text-3xl font-black text-[#92400E] flex items-center gap-3">
+                                    <div className="bg-[#FCD34D] p-3 rounded-2xl flex items-center justify-center">
+                                        <Icon name="calculator" className="w-8 h-8 text-white" />
+                                    </div>
+                                    營利事業所得稅：申報方式推薦及估算
+                                </h1>
+                                <p className="text-lg text-[#B45309] mt-2 font-medium italic">稅務小豆腐 🧊 讓繁瑣的稅務變簡單</p>
+                            </div>
+                        </div>
 
-    if (actual.tax <= review.tax || (actual.tax - review.tax) < 10000) {
-      advice = `【申報建議：核實申報 (查帳)】\n目前查帳稅額 (${formatCurrency(actual.tax)})，以「${actual.tax < review.tax ? '查帳申報' : '書審申報'}」稅額較具優勢。但要注意憑證是否為合法憑證，成本費用比例是否合理，成本是否已扣除期末存貨。\n\n若帳證齊全，也希望被國稅局調帳查核的機率降低，建議採「擴大書審」申報。`;
-    } 
-    else if (actual.tax > standard.tax && actual.tax > industry.tax) {
-      if (costRatio >= 0.5) {
-        advice = `【申報建議：所得額標準】\n目前帳上查帳稅額過高，顯示成本費用憑證不足。因您的總成本與費用已超過收入的 50% (${(costRatio * 100).toFixed(1)}%)，建議採用「所得額標準」申報，以降低稅負並符合行業常態。`;
-      } else {
-        advice = `【申報建議：同業利潤標準】\n目前帳上獲利極高且查帳稅負最重。由於總成本與費用低於收入的 50% (${(costRatio * 100).toFixed(1)}%)，建議採用「同業利潤標準」申報，可有效將稅額控制在該行業的利潤上限區間。`;
-      }
-    } 
-    else {
-      advice = `【申報建議：核實申報 (查帳)】\n建議優先檢視帳上憑證完整度。目前試算以「${actual.tax < review.tax ? '查帳申報' : '書審申報'}」稅額較具優勢。若憑證不足仍選擇「書審申報」，需注意未來三年內被抽查之風險。`;
-    }
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                            <div className="lg:col-span-1 space-y-8">
+                                {/* Step Guide */}
+                                <div className="bg-[#FEFCE8] p-6 rounded-3xl shadow-sm border border-[#FEF3C7]">
+                                    <h2 className="text-xl font-bold mb-5 flex items-center gap-2 text-[#92400E]">
+                                        <Icon name="list-ordered" className="w-5 h-5 text-[#F59E0B]" /> 📝 試算步驟
+                                    </h2>
+                                    <ul className="space-y-4 text-sm text-[#92400E]">
+                                        <li className="flex gap-3">
+                                            <span className="bg-[#FDE68A] text-[#92400E] w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 font-black">1</span>
+                                            <span>查詢行業代碼與比率。</span>
+                                        </li>
+                                        <li className="flex gap-3">
+                                            <span className="bg-[#FDE68A] text-[#92400E] w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 font-black">2</span>
+                                            <span>於右側輸入數據。</span>
+                                        </li>
+                                    </ul>
+                                </div>
+                                {/* Financial Inputs */}
+                                <div className="bg-white p-6 rounded-3xl shadow-sm border border-[#FEF3C7]">
+                                    <h2 className="text-xl font-bold mb-5 flex items-center gap-2 text-[#92400E]">
+                                        <Icon name="dollar-sign" className="w-5 h-5 text-[#10B981]" /> 財務數據 (TWD)
+                                    </h2>
+                                    <div className="space-y-5">
+                                        <div className="space-y-2">
+                                            <label className="text-xs text-[#B45309] font-black uppercase tracking-wider ml-1">全年度營業收入</label>
+                                            <input type="number" className="w-full p-4 border-2 border-[#FEF3C7] rounded-2xl font-mono text-xl bg-[#FFFDF2] focus:bg-white focus:border-[#FCD34D] outline-none transition" value={revenue} onChange={e => setRevenue(e.target.value)} />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-xs text-[#B45309] font-black uppercase tracking-wider ml-1">營業成本</label>
+                                            <input type="number" className="w-full p-4 border-2 border-[#FEF3C7] rounded-2xl font-mono text-xl bg-[#FFFDF2] focus:bg-white focus:border-[#FCD34D] outline-none transition" value={cost} onChange={e => setCost(e.target.value)} />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-xs text-[#B45309] font-black uppercase tracking-wider ml-1">營業費用</label>
+                                            <input type="number" className="w-full p-4 border-2 border-[#FEF3C7] rounded-2xl font-mono text-xl bg-[#FFFDF2] focus:bg-white focus:border-[#FCD34D] outline-none transition" value={expense} onChange={e => setExpense(e.target.value)} />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
 
-    setMyStrategy(advice);
-  }, [results]);
+                            <div className="lg:col-span-2 space-y-8">
+                                {/* Rate Inputs */}
+                                <div className="bg-white p-6 rounded-3xl shadow-sm border border-[#FEF3C7]">
+                                    <h2 className="text-xl font-bold mb-5 flex items-center gap-2 text-[#92400E]">
+                                        <Icon name="building-2" className="w-5 h-5 text-[#F59E0B]" /> 標準比率 (%)
+                                    </h2>
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                                        {[
+                                            { label: '擴大書審率', val: manualReviewRate, set: setManualReviewRate },
+                                            { label: '所得額標準', val: manualStandardRate, set: setManualStandardRate },
+                                            { label: '同業淨利率', val: manualIndustryRate, set: setManualIndustryRate }
+                                        ].map((item, i) => (
+                                            <div key={i} className="flex flex-col gap-2 bg-[#FFFDF2] p-4 rounded-2xl border border-[#FEF3C7] shadow-sm hover:border-[#FCD34D] transition">
+                                                <label className="text-sm font-black text-[#92400E]">{item.label}</label>
+                                                <div className="relative">
+                                                    <input type="number" className="w-full p-2 text-right bg-white border-b-2 border-[#FCD34D] pr-6 font-mono text-base outline-none" value={item.val} onChange={e => item.set(parseFloat(e.target.value) || 0)} />
+                                                    <span className="absolute right-1 top-2 text-[#F59E0B] text-sm font-black">%</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
 
-  return (
-    <div className="min-h-screen bg-[#FFFBEB] text-[#78350F] p-4 md:p-8 font-sans">
-      <div className="max-w-6xl mx-auto">
-        
-        {/* Header - Tofu Style */}
-        <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4 bg-white p-8 rounded-3xl shadow-sm border border-[#FEF3C7]">
-          <div>
-            <h1 className="text-3xl font-black text-[#92400E] flex items-center gap-3">
-              <div className="bg-[#FCD34D] p-3 rounded-2xl">
-                <Calculator className="w-8 h-8 text-white" />
-              </div>
-              營利事業所得稅：申報方式推薦及估算
-            </h1>
-            <p className="text-lg text-[#B45309] mt-2 font-medium italic">稅務小豆腐  讓繁瑣的稅務變簡單</p>
-          </div>
-        </div>
+                                {/* Results Grid */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                    <ResultCard title="核實申報 (查帳)" amount={results.actual.tax} rate={results.actual.rate} color="bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46]" />
+                                    <ResultCard title="擴大書審 (書審)" amount={results.review.tax} rate={manualReviewRate} color="bg-[#F0F9FF] border-[#BAE6FD] text-[#075985]" />
+                                    <ResultCard title="所得額標準" amount={results.standard.tax} rate={manualStandardRate} color="bg-[#FFF7ED] border-[#FED7AA] text-[#9A3412]" />
+                                    <ResultCard title="同業利潤標準" amount={results.industry.tax} rate={manualIndustryRate} color="bg-[#F5F3FF] border-[#DDD6FE] text-[#5B21B6]" />
+                                </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* 左側輸入區與步驟說明 */}
-          <div className="lg:col-span-1 space-y-8">
-            {/* 試算步驟區塊 */}
-            <div className="bg-[#FEFCE8] p-6 rounded-3xl shadow-sm border border-[#FEF3C7]">
-              <h2 className="text-xl font-bold mb-5 flex items-center gap-2 text-[#92400E]">
-                <ListOrdered className="w-5 h-5 text-[#F59E0B]" /> 📝 試算步驟
-              </h2>
-              <ul className="space-y-4 text-sm text-[#92400E] leading-relaxed">
-                <li className="flex gap-3">
-                  <span className="bg-[#FDE68A] text-[#92400E] w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 font-black">1</span>
-                  <span>
-                    查詢行業代碼：
-                    <a href="https://www.etax.nat.gov.tw/etwmain/etw113w1/ban/query" target="_blank" rel="noopener noreferrer" className="text-[#D97706] hover:text-[#B45309] font-black underline inline-flex items-center gap-1">
-                      國稅局查詢 <ExternalLink className="w-4 h-4" />
-                    </a>
-                  </span>
-                </li>
-                <li className="flex gap-3">
-                  <span className="bg-[#FDE68A] text-[#92400E] w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 font-black">2</span>
-                  <span>
-                    查詢標準比率：
-                    <a href="https://service.mof.gov.tw/public/Data/statistic/std/zhtw/search.html" target="_blank" rel="noopener noreferrer" className="text-[#D97706] hover:text-[#B45309] font-black underline inline-flex items-center gap-1">
-                      標準分類系統 <ExternalLink className="w-4 h-4" />
-                    </a>
-                  </span>
-                </li>
-                <li className="flex gap-3 font-semibold">
-                  <span className="bg-[#FDE68A] text-[#92400E] w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 font-black">3</span>
-                  <span>於右側輸入各項純益率與財務數據。</span>
-                </li>
-              </ul>
-            </div>
-            
-             {/* 財務數據輸入 */}
-             <div className="bg-white p-6 rounded-3xl shadow-sm border border-[#FEF3C7]">
-              <h2 className="text-xl font-bold mb-5 flex items-center gap-2 text-[#92400E]">
-                <DollarSign className="w-5 h-5 text-[#10B981]" /> 財務數據 (TWD)
-              </h2>
-              <div className="space-y-5">
-                <NumberInput label="全年度營業收入" value={revenue} setter={setRevenue} />
-                <NumberInput label="營業成本" value={cost} setter={setCost} />
-                <NumberInput label="營業費用" value={expense} setter={setExpense} />
-              </div>
-            </div>
-          </div>
+                                {/* Advice Box */}
+                                <div className="bg-white p-8 rounded-[2rem] shadow-md border-2 border-[#FCD34D] relative">
+                                    <div className="absolute top-0 right-0 p-3 bg-[#FCD34D] rounded-bl-2xl">
+                                        <Icon name="sparkles" className="w-5 h-5 text-[#92400E]" />
+                                    </div>
+                                    <h2 className="font-black text-[#92400E] flex items-center gap-2 text-xl mb-5">
+                                        <Icon name="clipboard-check" className="w-6 h-6" /> 稅務策略顧問
+                                    </h2>
+                                    <textarea readOnly className="w-full h-64 bg-[#FFFDF2] p-6 rounded-2xl border border-[#FEF3C7] text-base leading-relaxed text-[#78350F] outline-none resize-none font-medium" value={myStrategy} />
+                                    <div className="mt-5 flex items-start gap-3 bg-[#FEF3C7] p-4 rounded-2xl text-[#92400E]">
+                                        <Icon name="alert-circle" className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                                        <p className="text-xs font-bold leading-normal">豆腐提醒：本建議僅供參考，正式申報請務必諮詢配合的事務所。</p>
+                                    </div>
+                                </div>
 
-          {/* 右側結果區 */}
-          <div className="lg:col-span-2 space-y-8">
-            
-            {/* 比率輸入 */}
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-[#FEF3C7]">
-              <h2 className="text-xl font-bold mb-5 flex items-center gap-2 text-[#92400E]">
-                <Building2 className="w-5 h-5 text-[#F59E0B]" /> 標準比率 (%)
-              </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-                <RateInput label="擴大書審率" value={manualReviewRate} setter={setManualReviewRate} />
-                <RateInput label="所得額標準" value={manualStandardRate} setter={setManualStandardRate} />
-                <RateInput label="同業淨利率" value={manualIndustryRate} setter={setManualIndustryRate} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <MiniCard title="核實申報 (查帳)" amount={results.actual.tax} rate={results.actual.rate} type="actual" />
-                <MiniCard title="擴大書審 (書審)" amount={results.review.tax} rate={manualReviewRate} type="review" />
-                <MiniCard title="所得額標準" amount={results.standard.tax} rate={manualStandardRate} type="standard" />
-                <MiniCard title="同業利潤標準" amount={results.industry.tax} rate={manualIndustryRate} type="industry" />
-            </div>
-
-            {/* 策略建議區 */}
-            <div className="bg-white p-8 rounded-[2rem] shadow-md border-2 border-[#FCD34D] overflow-hidden relative">
-                <div className="absolute top-0 right-0 p-3 bg-[#FCD34D] rounded-bl-2xl">
-                  <Sparkles className="w-5 h-5 text-[#92400E]" />
+                                <div className="text-xs text-[#D97706] font-black bg-[#FEF3C7]/40 p-4 rounded-full text-center tracking-widest uppercase">
+                                    🧊 豆腐估算系統，僅供稅務參考 🧊
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div className="flex justify-between items-center mb-5">
-                    <h2 className="font-black text-[#92400E] flex items-center gap-2 text-xl">
-                        <ClipboardCheck className="w-6 h-6" /> 稅務策略顧問
-                    </h2>
-                </div>
-                <textarea 
-                    className="w-full h-64 bg-[#FFFDF2] p-6 rounded-2xl border border-[#FEF3C7] text-base leading-relaxed text-[#78350F] outline-none focus:ring-4 focus:ring-[#FEF3C7] transition resize-none font-medium"
-                    value={myStrategy}
-                    onChange={(e) => setMyStrategy(e.target.value)}
-                />
-                <div className="mt-5 flex items-start gap-3 bg-[#FEF3C7] p-4 rounded-2xl text-[#92400E]">
-                    <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
-                    <p className="text-xs font-bold leading-normal">豆腐提醒：本建議為邏輯試算結果，僅供參考，正式申報請務必諮詢配合的事務所。</p>
-                </div>
+            );
+        };
+
+        const ResultCard = ({ title, amount, rate, color }) => (
+            <div className={`p-6 rounded-3xl border-2 transition-all hover:-translate-y-1 hover:shadow-xl flex flex-col justify-between h-36 ${color}`}>
+                <div className="text-xs font-black opacity-80 uppercase tracking-widest">{title} ({rate.toFixed(1)}%)</div>
+                <div className="text-3xl font-black font-mono tracking-tighter">{formatCurrency(amount)}</div>
             </div>
+        );
 
-            <div className="text-xs text-[#D97706] font-black bg-[#FEF3C7]/40 p-4 rounded-full text-center tracking-widest">
-                 豆腐估算系統，僅供稅務參考 
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// 小元件 - 比率輸入
-const RateInput = ({ label, value, setter }) => (
-  <div className="flex flex-col gap-2 bg-[#FFFDF2] p-4 rounded-2xl border border-[#FEF3C7] shadow-sm hover:border-[#FCD34D] transition">
-    <label className="text-sm font-black text-[#92400E]">{label}</label>
-    <div className="relative">
-      <input 
-        type="number" 
-        className="w-full p-2 text-right bg-white border-b-2 border-[#FCD34D] pr-6 font-mono text-base focus:border-[#D97706] outline-none rounded-t" 
-        value={value} 
-        onChange={e => setter(parseFloat(e.target.value) || 0)} 
-      />
-      <span className="absolute right-1 top-2 text-[#F59E0B] text-sm font-black">%</span>
-    </div>
-  </div>
-);
-
-// 小元件 - 數字輸入
-const NumberInput = ({ label, value, setter }) => (
-  <div>
-    <label className="text-xs text-[#B45309] uppercase font-black mb-2 block ml-1 tracking-wider">{label}</label>
-    <input 
-      type="number" 
-      className="w-full p-4 border-2 border-[#FEF3C7] rounded-2xl font-mono text-xl bg-[#FFFDF2] focus:bg-white focus:border-[#FCD34D] outline-none transition shadow-inner" 
-      value={value} 
-      onChange={e => setter(e.target.value)} 
-    />
-  </div>
-);
-
-// 小元件 - 結果卡片
-const MiniCard = ({ title, amount, rate, type }) => {
-    const styles = {
-        actual: 'border-[#A7F3D0] bg-[#ECFDF5] text-[#065F46]',
-        review: 'border-[#BAE6FD] bg-[#F0F9FF] text-[#075985]',
-        standard: 'border-[#FED7AA] bg-[#FFF7ED] text-[#9A3412]',
-        industry: 'border-[#DDD6FE] bg-[#F5F3FF] text-[#5B21B6]',
-    }[type];
-    
-    return (
-        <div className={`p-6 rounded-3xl border-2 transition-all hover:-translate-y-1 hover:shadow-xl flex flex-col justify-between h-36 ${styles}`}>
-            <div className="text-xs font-black opacity-80 uppercase tracking-widest">{title} ({rate.toFixed(1)}%)</div>
-            <div className="text-3xl font-black font-mono tracking-tighter">{formatCurrency(amount)}</div>
-        </div>
-    );
-};
-
-export default App;
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
