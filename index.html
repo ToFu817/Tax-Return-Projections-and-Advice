@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Calculator, Building2, DollarSign, PieChart, FileText, AlertCircle, RefreshCw, Layers, Zap, CornerDownRight, ExternalLink, Key } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Calculator, Building2, DollarSign, AlertCircle, Layers, ClipboardCheck, Sparkles } from 'lucide-react';
 
 // ===================================================
 // 工具函數
@@ -25,62 +25,10 @@ const calculateTax = (taxableIncome) => {
 };
 
 // ===================================================
-// Gemini API 呼叫函數 (支援環境變數與手動輸入)
-// ===================================================
-
-const callGeminiAPI = async (systemPrompt, userQuery, manualKey) => {
-  // 優先順序：手動輸入 > 環境變數 > 預設空字串
-  const apiKey = manualKey || (typeof __initial_auth_token !== 'undefined' ? "" : ""); 
-  
-  if (!apiKey) throw new Error("MISSING_KEY");
-
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-
-  const payload = {
-    contents: [{ parts: [{ text: userQuery }] }],
-    systemInstruction: { parts: [{ text: systemPrompt }] },
-  };
-
-  let attempts = 0;
-  const maxRetries = 5;
-
-  while (attempts < maxRetries) {
-    try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        return result.candidates?.[0]?.content?.parts?.[0]?.text || "無法獲取 AI 建議。";
-      } else if (response.status === 429) {
-        const delay = Math.pow(2, attempts) * 1000 + Math.random() * 1000;
-        await new Promise(resolve => setTimeout(resolve, delay));
-        attempts++;
-      } else {
-        const errData = await response.json();
-        throw new Error(errData.error?.message || "API Error");
-      }
-    } catch (error) {
-      if (attempts === maxRetries - 1) throw error;
-      const delay = Math.pow(2, attempts) * 1000 + Math.random() * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
-      attempts++;
-    }
-  }
-};
-
-// ===================================================
 // React 主程式
 // ===================================================
 
 const App = () => {
-  // 設置與 API Key
-  const [userApiKey, setUserApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
-  const [showKeyInput, setShowKeyInput] = useState(false);
-
   // 財務數據與比率
   const [manualReviewRate, setManualReviewRate] = useState(6.0);
   const [manualStandardRate, setManualStandardRate] = useState(24.0);
@@ -89,18 +37,8 @@ const App = () => {
   const [cost, setCost] = useState('6000000');
   const [expense, setExpense] = useState('7000000');
   
-  // AI 狀態
-  const [aiAdvice, setAiAdvice] = useState('');
-  const [isAILoading, setIsAILoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-
-  // 儲存 Key 到 LocalStorage
-  const handleSaveKey = (e) => {
-    e.preventDefault();
-    localStorage.setItem('gemini_api_key', userApiKey);
-    setShowKeyInput(false);
-    setErrorMsg('');
-  };
+  // 策略紀錄 (手動/自動混合)
+  const [myStrategy, setMyStrategy] = useState('');
 
   const results = useMemo(() => {
     const rev = parseNumber(revenue);
@@ -120,37 +58,37 @@ const App = () => {
     };
   }, [revenue, cost, expense, manualReviewRate, manualStandardRate, manualIndustryRate]);
 
-  const handleGenerateAdvice = async () => {
-    if (!userApiKey) {
-        setShowKeyInput(true);
-        return;
+  // 自動生成建議邏輯
+  useEffect(() => {
+    const { rev, cst, exp, actual, review, standard, industry } = results;
+    if (rev <= 0) return;
+
+    let advice = "";
+    const costExpenseSum = cst + exp;
+    const costRatio = rev > 0 ? (costExpenseSum / rev) : 0;
+
+    // 邏輯 1: 如果查帳稅額低於書審，或差距極小 (差距在 10,000 元內)
+    if (actual.tax <= review.tax || (actual.tax - review.tax) < 10000) {
+      advice = `【稅金最低建議：核實申報 (查帳)】\n目前查帳稅額 (${formatCurrency(actual.tax)}) 低於或接近書審稅額。建議採用核實申報，但要注意憑證是否為合法憑證，成本費用比例是否合理，成本是否已扣除期末存貨。\n\n若帳證齊全，也希望被國稅局調帳查核的機率降低，建議採「擴大書審」申報。`;
+    } 
+    // 邏輯 2: 如果查帳稅額比所得額標準跟同業利潤標準還要高 (帳上獲利過高，成本費用不足)
+    else if (actual.tax > standard.tax && actual.tax > industry.tax) {
+      if (costRatio >= 0.5) {
+        advice = `【申報建議：所得額標準】\n目前帳上查帳稅額過高，顯示成本費用憑證不足。因您的總成本與費用已超過收入的 50% (${(costRatio * 100).toFixed(1)}%)，建議採用「所得額標準」申報，以降低稅負並符合行業常態。`;
+      } else {
+        advice = `【申報建議：同業利潤標準】\n目前帳上獲利極高且查帳稅負最重。由於總成本與費用低於收入的 50% (${(costRatio * 100).toFixed(1)}%)，建議採用「同業利潤標準」申報，可有效將稅額控制在該行業的利潤上限區間。`;
+      }
+    } 
+    // 邏輯 3: 其他一般情況
+    else {
+      advice = `【申報策略分析】\n建議優先檢視帳上憑證完整度。目前試算以「${actual.tax < review.tax ? '查帳' : '書審'}」稅額較具優勢。若選擇書審，需注意未來三年內被抽查之風險。`;
     }
-    
-    setIsAILoading(true);
-    setErrorMsg('');
-    setAiAdvice('');
 
-    const systemPrompt = `您是一位專業的台灣會計師。根據數據提供簡潔策略。
-    邏輯：
-    1. 若實際淨利率 > 書審率 且 營收 < 3000萬，不建議書審以避免成本費用不足被查帳。
-    2. 若實際淨利率 > 所得額標準，建議直接申報「所得額標準」以降低國稅局調帳風險。
-    3. 結尾必須包含：本分析為電腦模擬，最終申報請諮詢專業會計師。`;
-
-    const userQuery = `數據：營收 ${results.rev}, 實際淨利 ${results.actual.profit}, 實際利率 ${results.actual.rate.toFixed(2)}%, 書審率 ${manualReviewRate}%, 所得額標準 ${manualStandardRate}%。`;
-
-    try {
-      const advice = await callGeminiAPI(systemPrompt, userQuery, userApiKey);
-      setAiAdvice(advice);
-    } catch (err) {
-      if (err.message === "MISSING_KEY") setShowKeyInput(true);
-      else setErrorMsg(err.message);
-    } finally {
-      setIsAILoading(false);
-    }
-  };
+    setMyStrategy(advice);
+  }, [results]);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8">
+    <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto">
         
         {/* Header */}
@@ -158,62 +96,29 @@ const App = () => {
           <div>
             <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
               <Calculator className="w-7 h-7 text-blue-600" />
-              台灣營所稅申報試算機 (GitHub 開源版)
+              台灣營所稅申報試算機
             </h1>
+            <p className="text-sm text-slate-500">快速比較不同申報方式的稅負差異</p>
           </div>
-          <button 
-            onClick={() => setShowKeyInput(true)}
-            className="text-xs flex items-center gap-1 text-slate-500 hover:text-blue-600 transition"
-          >
-            <Key className="w-3 h-3" /> {userApiKey ? '更新 API Key' : '設定 API Key'}
-          </button>
         </div>
-
-        {/* API Key Modal */}
-        {showKeyInput && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-2xl">
-              <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
-                <Key className="w-5 h-5 text-blue-600" /> 設定 Google Gemini API Key
-              </h3>
-              <p className="text-sm text-slate-500 mb-4">
-                本程式使用 Gemini AI 提供建議。您的 Key 將僅儲存於您的瀏覽器中。
-              </p>
-              <form onSubmit={handleSaveKey}>
-                <input 
-                  type="password"
-                  placeholder="在此貼上您的 API Key..."
-                  className="w-full p-2 border rounded-lg mb-4 outline-none focus:ring-2 focus:ring-blue-500"
-                  value={userApiKey}
-                  onChange={(e) => setUserApiKey(e.target.value)}
-                  required
-                />
-                <div className="flex gap-2">
-                  <button type="submit" className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold">儲存並關閉</button>
-                  <button type="button" onClick={() => setShowKeyInput(false)} className="px-4 py-2 text-slate-500">取消</button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* 左側輸入區 */}
           <div className="space-y-6">
             <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
               <h2 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
-                <Building2 className="w-4 h-4" /> 標準比率 (%)
+                <Building2 className="w-4 h-4 text-blue-500" /> 標準比率 (%)
               </h2>
               <div className="space-y-3">
-                <RateInput label="擴大書審率" value={manualReviewRate} setter={setManualReviewRate} color="blue" />
-                <RateInput label="所得額標準" value={manualStandardRate} setter={setManualStandardRate} color="orange" />
-                <RateInput label="同業淨利率" value={manualIndustryRate} setter={setManualIndustryRate} color="purple" />
+                <RateInput label="擴大書審率" value={manualReviewRate} setter={setManualReviewRate} />
+                <RateInput label="所得額標準" value={manualStandardRate} setter={setManualStandardRate} />
+                <RateInput label="同業淨利率" value={manualIndustryRate} setter={setManualIndustryRate} />
               </div>
             </div>
 
             <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
               <h2 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
-                <DollarSign className="w-4 h-4" /> 財務數據 (TWD)
+                <DollarSign className="w-4 h-4 text-green-500" /> 財務數據 (TWD)
               </h2>
               <div className="space-y-3">
                 <NumberInput label="全年度營業收入" value={revenue} setter={setRevenue} />
@@ -225,34 +130,36 @@ const App = () => {
 
           {/* 右側結果區 */}
           <div className="lg:col-span-2 space-y-6">
-            <div className="grid grid-cols-2 gap-4">
-                <MiniCard title="查帳申報" amount={results.actual.tax} rate={results.actual.rate} color="green" />
-                <MiniCard title="書審申報" amount={results.review.tax} rate={manualReviewRate} color="blue" />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <MiniCard title="核實申報 (查帳)" amount={results.actual.tax} rate={results.actual.rate} color="green" />
+                <MiniCard title="擴大書審 (書審)" amount={results.review.tax} rate={manualReviewRate} color="blue" />
                 <MiniCard title="所得額標準" amount={results.standard.tax} rate={manualStandardRate} color="orange" />
-                <MiniCard title="同業淨利率" amount={results.industry.tax} rate={manualIndustryRate} color="purple" />
+                <MiniCard title="同業利潤標準" amount={results.industry.tax} rate={manualIndustryRate} color="purple" />
             </div>
 
-            <div className="bg-white p-6 rounded-xl shadow-md border-t-4 border-purple-500">
+            <div className="bg-white p-6 rounded-xl shadow-md border-t-4 border-blue-600">
                 <div className="flex justify-between items-center mb-4">
-                    <h2 className="font-bold text-purple-700 flex items-center gap-2">
-                        <Zap className="w-5 h-5" /> AI 稅務策略顧問
+                    <h2 className="font-bold text-slate-700 flex items-center gap-2">
+                        <ClipboardCheck className="w-5 h-5 text-blue-600" /> 稅務策略顧問 (自動建議)
                     </h2>
-                    <button 
-                        onClick={handleGenerateAdvice}
-                        disabled={isAILoading}
-                        className="bg-purple-600 text-white px-4 py-1.5 rounded-full text-sm font-bold flex items-center gap-2 hover:bg-purple-700 transition disabled:opacity-50"
-                    >
-                        {isAILoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : '開始分析'}
-                    </button>
+                    <span className="flex items-center gap-1 text-[10px] text-blue-600 bg-blue-50 px-2 py-1 rounded font-bold uppercase">
+                        <Sparkles className="w-3 h-3" /> Smart Analysis
+                    </span>
                 </div>
-                <div className="bg-slate-50 p-4 rounded-lg border text-sm leading-relaxed text-slate-700 min-h-[100px]">
-                    {errorMsg && <p className="text-red-500 font-bold mb-2">錯誤：{errorMsg}</p>}
-                    {aiAdvice || "請輸入數據並點擊分析按鈕以獲取建議。建議將考慮查帳風險，若成本費用不足，將避開低報風險。"}
+                <textarea 
+                    className="w-full h-48 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm leading-relaxed text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition resize-none font-medium"
+                    value={myStrategy}
+                    onChange={(e) => setMyStrategy(e.target.value)}
+                    placeholder="系統將根據數據自動生成分析建議，您也可以手動修改..."
+                />
+                <div className="mt-3 flex items-start gap-2 text-amber-600">
+                    <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs italic">本建議由預設邏輯產生，正式申報請諮詢專業執業會計師。</p>
                 </div>
             </div>
 
-            <div className="text-[10px] text-slate-400 bg-slate-100 p-3 rounded">
-                * 本專案僅供學習交流。使用者需自備 Google Gemini API Key。所有運算於本地瀏覽器完成，開發者不會獲取您的任何數據。
+            <div className="text-[10px] text-slate-400 bg-slate-100 p-3 rounded text-center">
+                本工具為離線純前端試算，自動建議邏輯已內嵌於本地代碼中。
             </div>
           </div>
         </div>
@@ -262,13 +169,13 @@ const App = () => {
 };
 
 // 小元件
-const RateInput = ({ label, value, setter, color }) => (
+const RateInput = ({ label, value, setter }) => (
   <div className="flex justify-between items-center">
     <label className="text-sm text-slate-600">{label}</label>
     <div className="relative w-24">
       <input 
         type="number" 
-        className="w-full p-1 text-right border rounded pr-5 font-mono" 
+        className="w-full p-1 text-right border rounded pr-5 font-mono text-sm focus:border-blue-500 outline-none" 
         value={value} 
         onChange={e => setter(parseFloat(e.target.value) || 0)} 
       />
@@ -282,7 +189,7 @@ const NumberInput = ({ label, value, setter }) => (
     <label className="text-[10px] text-slate-400 uppercase font-bold">{label}</label>
     <input 
       type="number" 
-      className="w-full p-2 border rounded font-mono text-lg bg-slate-50" 
+      className="w-full p-2 border border-slate-200 rounded font-mono text-lg bg-slate-50 focus:bg-white focus:border-blue-500 outline-none transition" 
       value={value} 
       onChange={e => setter(e.target.value)} 
     />
@@ -297,7 +204,7 @@ const MiniCard = ({ title, amount, rate, color }) => {
         purple: 'border-purple-200 bg-purple-50 text-purple-700',
     }[color];
     return (
-        <div className={`p-4 rounded-xl border-2 ${colors}`}>
+        <div className={`p-4 rounded-xl border-2 transition-all hover:shadow-md ${colors}`}>
             <div className="text-xs font-bold opacity-70 mb-1">{title} ({rate.toFixed(1)}%)</div>
             <div className="text-xl font-black font-mono">{formatCurrency(amount)}</div>
         </div>
