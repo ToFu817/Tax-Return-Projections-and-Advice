@@ -41,7 +41,7 @@
 <body>
     <div id="root">
         <div style="display: flex; justify-content: center; align-items: center; height: 100vh; color: #92400E; font-weight: bold;">
-             豆腐正在準備中...
+              豆腐正在準備中...
         </div>
     </div>
 
@@ -81,9 +81,9 @@
             const [manualReviewRate, setManualReviewRate] = useState(6.0);
             const [manualStandardRate, setManualStandardRate] = useState(24.0);
             const [manualIndustryRate, setManualIndustryRate] = useState(26.0);
-            const [revenue, setRevenue] = useState('15000000');
-            const [cost, setCost] = useState('6000000');
-            const [expense, setExpense] = useState('7000000');
+            const [revenue, setRevenue] = useState('1500000');
+            const [cost, setCost] = useState('600000');
+            const [expense, setExpense] = useState('700000');
             const [myStrategy, setMyStrategy] = useState('');
 
             const results = useMemo(() => {
@@ -104,21 +104,57 @@
             }, [revenue, cost, expense, manualReviewRate, manualStandardRate, manualIndustryRate]);
 
             useEffect(() => {
-                const { rev, actual, review, standard, industry } = results;
+                const { rev, cst, exp, actual, review, standard, industry } = results;
                 if (rev <= 0) {
                     setMyStrategy("請輸入營業收入開始試算。");
                     return;
                 }
-                let advice = "";
-                const costRatio = rev > 0 ? ((parseNumber(cost) + parseNumber(expense)) / rev) : 0;
 
-                if (actual.tax <= review.tax || (actual.tax - review.tax) < 10000) {
-                    advice = `【申報建議：核實申報 (查帳)】\n目前查帳稅額 (${formatCurrency(actual.tax)})，以「${actual.tax < review.tax ? '查帳申報' : '書審申報'}」稅額較具優勢。但要注意憑證是否為合法憑證，成本費用比例是否合理，成本是否已扣除期末存貨。\n\n若帳證齊全，也希望被國稅局調帳查核的機率降低，建議採「擴大書審」申報。`;
-                } else if (actual.tax > standard.tax && actual.tax > industry.tax) {
-                    advice = `【申報建議：${costRatio >= 0.5 ? '所得額標準' : '同業利潤標準'}】\n目前帳上查帳稅額過高，顯示成本費用憑證不足。建議採用「${costRatio >= 0.5 ? '所得額標準' : '同業利潤標準'}」申報，以降低稅負並符合行業常態。`;
-                } else {
-                    advice = `【申報建議：核實申報 (查帳)】\n建議優先檢視帳上憑證完整度。目前試算以「${actual.tax < review.tax ? '查帳申報' : '書審申報'}」稅額較具優勢。`;
+                let advice = "";
+                const totalExp = parseNumber(cst) + parseNumber(exp);
+                const expRatio = rev > 0 ? (totalExp / rev) : 0;
+
+                // 1. 收入門檻判定 (超過3000萬不能書審)
+                if (rev >= 30000000) {
+                    if (actual.tax > standard.tax || actual.tax > industry.tax) {
+                        const targetType = expRatio >= 0.5 ? "所得額標準" : "同業利潤標準";
+                        advice = `【申報建議：${targetType} (收入已達 3,000 萬)】\n目前查帳稅金高於標準值。由於您的成本費用佔收入比例為 ${(expRatio * 100).toFixed(1)}% (${expRatio >= 0.5 ? '≧ 50%' : '< 50%'}), 建議採「${targetType}」申報。`;
+                    } else {
+                        advice = `【申報建議：核實申報 (查帳)】\n由於全年度營業收入已達 ${formatCurrency(rev)} (超過 3,000 萬)，依法不適用「擴大書審」申報。目前查帳稅額最低，建議採核實申報，並確保帳證齊全。`;
+                    }
+                } 
+                // 2. 雙 0 判定
+                else if (actual.tax === 0 && review.tax === 0) {
+                    advice = `【申報建議：擴大書審 (書審)】\n目前試算查帳與書審之稅額皆為 0 元。在符合資格的前提下，建議優先採「書審申報」以簡化申報作業流程。`;
                 }
+                // 3. 查帳稅金低於書審 (或相等) -> 自願調高建議
+                else if (actual.tax <= review.tax) {
+                    const taxDiff = review.tax - actual.tax;
+                    advice = `【申報建議：核實申報 (查帳)】\n目前查帳申報的稅額 (${formatCurrency(actual.tax)}) 低於書審申報的稅額 (${formatCurrency(review.tax)})，採「查帳申報」稅負最輕。\n\n⚠️ 查帳注意事項：\n1. 務必確認取得合法憑證。\n2. 檢視成本費用比例之合理性。\n3. 確認成本是否已扣除期末存貨，以免低估損益導致補稅。\n\n💡 自願調整建議：\n若您的帳證不夠齊全，或希望「調降國稅局調帳查核的機率」，您可以選擇「自願調整」至書審純益率，以此多繳稅額 (${formatCurrency(taxDiff)}) 的方式改採「書審申報」。`;
+                }
+                // 4. 查帳稅金較高的情況 (查帳 > 書審)
+                else {
+                    let recommendedType = "";
+                    let reason = "";
+                    
+                    // 根據要求：不能用書審，需判斷查帳與所得額哪個低
+                    if (actual.tax < standard.tax) {
+                        recommendedType = "核實申報 (查帳)";
+                        reason = `雖然目前以「書審申報」最低，但因為書審申報的條件是自願由低調高繳稅申報，所以不適用。根據您「查帳申報」的稅額(${formatCurrency(actual.tax)}) 低於「所得額標準」(${formatCurrency(standard.tax)})。基於真實帳務反映與節稅考量，建議採用「${recommendedType}」。`;
+                    } else {
+                        // 查帳稅額較高，看成本費用是否超過 50%
+                        if (expRatio >= 0.5) {
+                            recommendedType = "所得額標準";
+                            reason = `由於查帳稅額高於所得額標準，且您的成本費用佔收入比例為 ${(expRatio * 100).toFixed(1)}% (≧ 50%)，建議採用「${recommendedType}」申報。`;
+                        } else {
+                            recommendedType = "同業利潤標準";
+                            reason = `由於查帳稅額高於同業利潤標準，且您的成本費用佔收入比例為 ${(expRatio * 100).toFixed(1)}% (< 50%)，建議採用「${recommendedType}」申報。`;
+                        }
+                    }
+
+                    advice = `【申報建議：${recommendedType}】\n${reason}\n`;
+                }
+
                 setMyStrategy(advice);
             }, [results]);
 
@@ -134,7 +170,7 @@
                                     </div>
                                     營利事業所得稅：申報方式推薦及估算
                                 </h1>
-                                <p className="text-lg text-[#B45309] mt-2 font-medium italic">稅務小豆腐 🧊 讓繁瑣的稅務變簡單</p>
+                                <p className="text-lg text-[#B45309] mt-2 font-medium italic">稅務小豆腐 讓繁瑣的稅務變簡單</p>
                             </div>
                         </div>
 
@@ -143,7 +179,7 @@
                                 {/* Step Guide */}
                                 <div className="bg-[#FEFCE8] p-6 rounded-3xl shadow-sm border border-[#FEF3C7]">
                                     <h2 className="text-xl font-bold mb-5 flex items-center gap-2 text-[#92400E]">
-                                        <Icon name="list-ordered" className="w-5 h-5 text-[#F59E0B]" /> 📝 申報策略試算步驟
+                                        <Icon name="list-ordered" className="w-5 h-5 text-[#F59E0B]" />  申報策略試算步驟
                                     </h2>
                                     <ul className="space-y-5 text-sm text-[#92400E] font-medium">
                                         <li className="flex gap-3">
@@ -166,11 +202,11 @@
                                         </li>
                                         <li className="flex gap-3">
                                             <span className="bg-[#FDE68A] text-[#92400E] w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 font-black">3</span>
-                                            <p>輸入擴大書審、所得額標準、同業利潤標準淨利率。</p>
+                                            <p>輸入目前實際營業收入、成本與費用。</p>
                                         </li>
                                         <li className="flex gap-3">
                                             <span className="bg-[#FDE68A] text-[#92400E] w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 font-black">4</span>
-                                            <p>輸入目前實際營業收入、成本與費用。</p>
+                                            <p>輸入擴大書審、所得額標準、同業利潤標準淨利率。</p>
                                         </li>
                                         <li className="flex gap-3">
                                             <span className="bg-[#FDE68A] text-[#92400E] w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 font-black">5</span>
@@ -239,15 +275,15 @@
                                     <h2 className="font-black text-[#92400E] flex items-center gap-2 text-xl mb-5">
                                         <Icon name="clipboard-check" className="w-6 h-6" /> 稅務策略顧問
                                     </h2>
-                                    <textarea readOnly className="w-full h-64 bg-[#FFFDF2] p-6 rounded-2xl border border-[#FEF3C7] text-base leading-relaxed text-[#78350F] outline-none resize-none font-medium" value={myStrategy} />
+                                    <textarea readOnly className="w-full h-80 bg-[#FFFDF2] p-6 rounded-2xl border border-[#FEF3C7] text-base leading-relaxed text-[#78350F] outline-none resize-none font-medium" value={myStrategy} />
                                     <div className="mt-5 flex items-start gap-3 bg-[#FEF3C7] p-4 rounded-2xl text-[#92400E]">
                                         <Icon name="alert-circle" className="w-5 h-5 mt-0.5 flex-shrink-0" />
-                                        <p className="text-xs font-bold leading-normal">豆腐提醒：本建議僅供參考，正式申報請務必諮詢配合的事務所。</p>
+                                        <p className="text-xs font-bold leading-normal">豆腐提醒：本建議僅供參考，正式申報請務必諮詢專業事務所。</p>
                                     </div>
                                 </div>
 
                                 <div className="text-xs text-[#D97706] font-black bg-[#FEF3C7]/40 p-4 rounded-full text-center tracking-widest uppercase">
-                                    🧊 豆腐估算系統，僅供稅務參考 🧊
+                                    豆腐估算系統，僅供稅務參考
                                 </div>
                             </div>
                         </div>
