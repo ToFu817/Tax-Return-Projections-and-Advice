@@ -36,12 +36,21 @@
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
         }
+
+        /* 建議稅額紅框樣式 */
+        .recommend-border {
+            border-color: #EF4444 !important;
+            border-width: 3px !important;
+            position: relative;
+            box-shadow: 0 10px 15px -3px rgba(239, 68, 68, 0.2);
+            z-index: 10;
+        }
     </style>
 </head>
 <body>
     <div id="root">
         <div style="display: flex; justify-content: center; align-items: center; height: 100vh; color: #92400E; font-weight: bold;">
-              豆腐正在準備中...
+            豆腐正在準備中...
         </div>
     </div>
 
@@ -85,6 +94,7 @@
             const [cost, setCost] = useState('600000');
             const [expense, setExpense] = useState('700000');
             const [myStrategy, setMyStrategy] = useState('');
+            const [recommendedTarget, setRecommendedTarget] = useState(''); // 儲存建議的申報類型
 
             const results = useMemo(() => {
                 const rev = parseNumber(revenue);
@@ -107,10 +117,12 @@
                 const { rev, cst, exp, actual, review, standard, industry } = results;
                 if (rev <= 0) {
                     setMyStrategy("請輸入營業收入開始試算。");
+                    setRecommendedTarget('');
                     return;
                 }
 
                 let advice = "";
+                let target = ""; // 用於追蹤紅框要框哪一個
                 const totalExp = parseNumber(cst) + parseNumber(exp);
                 const expRatio = rev > 0 ? (totalExp / rev) : 0;
 
@@ -118,17 +130,21 @@
                 if (rev >= 30000000) {
                     if (actual.tax > standard.tax || actual.tax > industry.tax) {
                         const targetType = expRatio >= 0.5 ? "所得額標準" : "同業利潤標準";
+                        target = expRatio >= 0.5 ? "standard" : "industry";
                         advice = `【申報建議：${targetType} (收入已達 3,000 萬)】\n目前查帳稅金高於標準值。由於您的成本費用佔收入比例為 ${(expRatio * 100).toFixed(1)}% (${expRatio >= 0.5 ? '≧ 50%' : '< 50%'}), 建議採「${targetType}」申報。`;
                     } else {
-                        advice = `【申報建議：核實申報 (查帳)】\n由於全年度營業收入已達 ${formatCurrency(rev)} (超過 3,000 萬)，依法不適用「擴大書審」申報。目前查帳稅額最低，建議採核實申報，並確保帳證齊全。`;
+                        target = "actual";
+                        advice = `【申報建議：核實申報 (查帳)】\n由於全年度營業收入已達 ${formatCurrency(rev)} (超過 3,000 萬)，依法不適用「擴大書審」申報。目前查帳稅額最低，建議採核實申報，並確保帳證齊全。\n\n⚠️ 查帳注意事項：\n1. 務必確認取得合法憑證。\n2. 檢視成本費用比例之合理性。\n3. 確認成本是否已扣除期末存貨，以免低估損益導致補稅。`;
                     }
                 } 
                 // 2. 雙 0 判定
                 else if (actual.tax === 0 && review.tax === 0) {
+                    target = "review";
                     advice = `【申報建議：擴大書審 (書審)】\n目前試算查帳與書審之稅額皆為 0 元。在符合資格的前提下，建議優先採「書審申報」以簡化申報作業流程。`;
                 }
                 // 3. 查帳稅金低於書審 (或相等) -> 自願調高建議
                 else if (actual.tax <= review.tax) {
+                    target = "actual";
                     const taxDiff = review.tax - actual.tax;
                     advice = `【申報建議：核實申報 (查帳)】\n目前查帳申報的稅額 (${formatCurrency(actual.tax)}) 低於書審申報的稅額 (${formatCurrency(review.tax)})，採「查帳申報」稅負最輕。\n\n⚠️ 查帳注意事項：\n1. 務必確認取得合法憑證。\n2. 檢視成本費用比例之合理性。\n3. 確認成本是否已扣除期末存貨，以免低估損益導致補稅。\n\n💡 自願調整建議：\n若您的帳證不夠齊全，或希望「調降國稅局調帳查核的機率」，您可以選擇「自願調整」至書審純益率，以此多繳稅額 (${formatCurrency(taxDiff)}) 的方式改採「書審申報」。`;
                 }
@@ -137,25 +153,26 @@
                     let recommendedType = "";
                     let reason = "";
                     
-                    // 根據要求：不能用書審，需判斷查帳與所得額哪個低
                     if (actual.tax < standard.tax) {
+                        target = "actual";
                         recommendedType = "核實申報 (查帳)";
-                        reason = `雖然目前以「書審申報」最低，但因為書審申報的條件是自願由低調高繳稅申報，所以不適用。根據您「查帳申報」的稅額(${formatCurrency(actual.tax)}) 低於「所得額標準」(${formatCurrency(standard.tax)})。基於真實帳務反映與節稅考量，建議採用「${recommendedType}」。`;
+                        reason = `雖然目前以「書審申報」最低，但因為書審申報的條件是自願由低調高繳稅申報，所以不適用。根據您「查帳申報」的稅額(${formatCurrency(actual.tax)}) 低於「所得額標準」(${formatCurrency(standard.tax)})。基於真實帳務反映與節稅考量，建議採用「${recommendedType}」。\n\n⚠️ 查帳注意事項：\n1. 務必確認取得合法憑證。\n2. 檢視成本費用比例之合理性。\n3. 確認成本是否已扣除期末存貨，以免低估損益導致補稅。`;
                     } else {
-                        // 查帳稅額較高，看成本費用是否超過 50%
                         if (expRatio >= 0.5) {
+                            target = "standard";
                             recommendedType = "所得額標準";
                             reason = `由於查帳稅額高於所得額標準，且您的成本費用佔收入比例為 ${(expRatio * 100).toFixed(1)}% (≧ 50%)，建議採用「${recommendedType}」申報。`;
                         } else {
+                            target = "industry";
                             recommendedType = "同業利潤標準";
                             reason = `由於查帳稅額高於同業利潤標準，且您的成本費用佔收入比例為 ${(expRatio * 100).toFixed(1)}% (< 50%)，建議採用「${recommendedType}」申報。`;
                         }
                     }
-
                     advice = `【申報建議：${recommendedType}】\n${reason}\n`;
                 }
 
                 setMyStrategy(advice);
+                setRecommendedTarget(target);
             }, [results]);
 
             return (
@@ -261,10 +278,35 @@
 
                                 {/* Results Grid */}
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                    <ResultCard title="查帳申報 ()" amount={results.actual.tax} rate={results.actual.rate} color="bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46]" />
-                                    <ResultCard title="擴大書審 " amount={results.review.tax} rate={manualReviewRate} color="bg-[#F0F9FF] border-[#BAE6FD] text-[#075985]" />
-                                    <ResultCard title="所得額標準" amount={results.standard.tax} rate={manualStandardRate} color="bg-[#FFF7ED] border-[#FED7AA] text-[#9A3412]" />
-                                    <ResultCard title="同業利潤標準" amount={results.industry.tax} rate={manualIndustryRate} color="bg-[#F5F3FF] border-[#DDD6FE] text-[#5B21B6]" />
+                                    <ResultCard 
+                                        title="查帳申報" 
+                                        amount={results.actual.tax} 
+                                        rate={results.actual.rate} 
+                                        color="bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46]" 
+                                        isRecommended={recommendedTarget === 'actual'} 
+                                    />
+                                    <ResultCard 
+                                        title="擴大書審" 
+                                        amount={results.review.tax} 
+                                        rate={manualReviewRate} 
+                                        color="bg-[#F0F9FF] border-[#BAE6FD] text-[#075985]" 
+                                        isRecommended={recommendedTarget === 'review'}
+                                        isDisabled={parseNumber(revenue) >= 30000000}
+                                    />
+                                    <ResultCard 
+                                        title="所得額標準" 
+                                        amount={results.standard.tax} 
+                                        rate={manualStandardRate} 
+                                        color="bg-[#FFF7ED] border-[#FED7AA] text-[#9A3412]" 
+                                        isRecommended={recommendedTarget === 'standard'} 
+                                    />
+                                    <ResultCard 
+                                        title="同業利潤標準" 
+                                        amount={results.industry.tax} 
+                                        rate={manualIndustryRate} 
+                                        color="bg-[#F5F3FF] border-[#DDD6FE] text-[#5B21B6]" 
+                                        isRecommended={recommendedTarget === 'industry'} 
+                                    />
                                 </div>
 
                                 {/* Advice Box */}
@@ -292,10 +334,20 @@
             );
         };
 
-        const ResultCard = ({ title, amount, rate, color }) => (
-            <div className={`p-6 rounded-3xl border-2 transition-all hover:-translate-y-1 hover:shadow-xl flex flex-col justify-between h-36 ${color}`}>
-                <div className="text-xs font-black opacity-80 uppercase tracking-widest">{title} ({rate.toFixed(1)}%)</div>
-                <div className="text-3xl font-black font-mono tracking-tighter">{formatCurrency(amount)}</div>
+        const ResultCard = ({ title, amount, rate, color, isRecommended, isDisabled }) => (
+            <div className={`p-6 rounded-3xl border-2 transition-all duration-300 relative flex flex-col justify-between h-36 ${color} ${isRecommended ? 'recommend-border scale-105' : 'hover:-translate-y-1 hover:shadow-xl'} ${isDisabled ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
+                {isRecommended && (
+                    <div className="absolute -top-3 -right-3 bg-red-500 text-white text-[10px] font-black px-3 py-1 rounded-full shadow-lg z-20">
+                        建議申報方式
+                    </div>
+                )}
+                <div className="text-xs font-black opacity-80 uppercase tracking-widest">
+                    {title} ({rate.toFixed(1)}%)
+                    {isDisabled && " (不適用)"}
+                </div>
+                <div className="text-3xl font-black font-mono tracking-tighter">
+                    {isDisabled ? "---" : formatCurrency(amount)}
+                </div>
             </div>
         );
 
